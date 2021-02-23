@@ -27,6 +27,7 @@ Gem::Specification.new do |spec|
   spec.add_development_dependency 'rubocop-rake'
   spec.add_development_dependency 'rubocop-rspec'
 
+  spec.add_runtime_dependency 'colorize'
   spec.add_runtime_dependency 'curses'
 
   spec.required_ruby_version = '>= 2.4.0'

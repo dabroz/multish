@@ -2,6 +2,7 @@ require 'multish/version'
 
 require 'curses'
 require 'open3'
+require 'colorize'
 
 class MultishItem
   attr_reader :command
@@ -10,6 +11,7 @@ class MultishItem
     @command = command
     @index = index
     @count = count
+    @output = ''
   end
 
   def width
@@ -52,9 +54,12 @@ class MultishItem
   def update_title!
     @nav_window.setpos(0, 0)
     @nav_window.attron(Curses.color_pair(color_code) | Curses::A_REVERSE | Curses::A_BOLD)
-    text = finished? ? "[ #{command} ] -> #{@exit_code}" : "$ #{command}"
-    @nav_window.addstr(text.ljust(width - 1))
+    @nav_window.addstr(window_title.ljust(width - 1))
     @nav_window.refresh
+  end
+
+  def window_title
+    finished? ? "[ #{command} ] -> #{@exit_code}" : "$ #{command}"
   end
 
   def open_process!
@@ -74,6 +79,7 @@ class MultishItem
   end
 
   def print(text)
+    @output << text
     @window.addstr(text)
     @window.refresh
   end
@@ -87,11 +93,20 @@ class MultishItem
     end
     ret
   end
+
+  def print_output!
+    warn window_title.red
+    warn @output
+  end
 end
 
 class Multish
   def self.run!(args)
     self.new.run!(args)
+  end
+
+  def errored?
+    @commands.any?(&:errored?)
   end
 
   def run!(args)
@@ -122,7 +137,15 @@ class Multish
     ensure
       Curses.curs_set(1)
       Curses.close_screen
-      exit(@commands.any?(&:errored?) ? 1 : 0)
+      if errored?
+        warn 'At least one of the commands exited with error.'
+        @commands.select(&:errored?).each do |command|
+          command.print_output!
+        end
+        exit 1
+      else
+        exit 0
+      end
     end
   end
 end
