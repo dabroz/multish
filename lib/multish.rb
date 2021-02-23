@@ -4,6 +4,8 @@ require 'curses'
 require 'open3'
 require 'colorize'
 
+BRIGHT_WHITE = 15
+
 class MultishItem
   attr_reader :command
 
@@ -80,8 +82,92 @@ class MultishItem
 
   def print(text)
     @output << text
-    @window.addstr(text)
+    color_print(@window, text)
     @window.refresh
+  end
+
+  def color_print(window, input)
+    parse_commands(input) do |op, arg|
+      case op
+      when :string
+        window.addstr(arg)
+      when :reset
+        window.attroff(Curses.color_pair(10) | Curses::A_BOLD)
+      when :bold
+        window.attron(Curses::A_BOLD)
+      when :color
+        Curses.init_pair(10, arg, BRIGHT_WHITE)
+        window.attron(Curses.color_pair(10))
+      when :error
+        raise "ERROR: #{arg}"
+      end
+    end
+  end
+
+  def parse_commands(string)
+    parse_string(string) do |op, arg|
+      case op
+      when :string
+        yield [:string, arg]
+      when :escape
+        if arg == '[m'
+          yield [:reset]
+        elsif arg[/^\[(\d+;)+(\d+)m$/]
+          args = ($1 + $2).split(';')
+          args.each do |subarg|
+            subarg = subarg.to_i
+            case subarg
+            when 1
+              yield [:bold]
+            when 30..37
+              color = Curses::COLOR_BLACK + subarg - 30
+              yield [:color, color]
+            end
+          end
+        end
+      when :error
+        yield [:error, arg]
+      end
+    end
+  end
+
+  def parse_string(string)
+    len = string.length
+    i = 0
+    chars = ''
+    while i < len
+      char = string[i]
+      if char == "\e"
+        yield [:string, chars] if !chars.empty? && block_given?
+        chars = ''
+        escape = ''
+        i += 1
+        if string[i] == '['
+          escape << string[i]
+          i += 1
+        else
+          return yield [:error, string]
+        end
+        while string[i] =~ /[\x30-\x3f]/
+          escape << string[i]
+          i += 1
+        end
+        while string[i] =~ /[\x20–\x2f]/
+          escape << string[i]
+          i += 1
+        end
+        if string[i] =~ /[\x40-\x7e]/
+          escape << string[i]
+        else
+          return yield [:error, string]
+        end
+        yield [:escape, escape] if block_given?
+      else
+        chars << char
+      end
+      i += 1
+    end
+    yield [:string, chars] if !chars.empty? && block_given?
   end
 
   def finished?
@@ -117,6 +203,7 @@ class Multish
     Curses.init_pair(2, Curses::COLOR_WHITE, Curses::COLOR_GREEN)
     Curses.init_pair(3, Curses::COLOR_WHITE, Curses::COLOR_RED)
     Curses.init_pair(4, Curses::COLOR_WHITE, Curses::COLOR_BLACK)
+    Curses.init_color(BRIGHT_WHITE, 1000, 1000, 1000)
     Curses.use_default_colors
     Curses.cbreak
     @commands.each(&:create_window!)
@@ -134,14 +221,17 @@ class Multish
         @commands.each(&:update_title!)
         break if @commands.all?(&:finished?)
       end
+    rescue StandardError => e
+      Curses.close_screen
+      warn 'INTERNAL ERROR'.red
+      warn e.message
+      warn e.backtrace
     ensure
       Curses.curs_set(1)
       Curses.close_screen
       if errored?
         warn 'At least one of the commands exited with error.'
-        @commands.select(&:errored?).each do |command|
-          command.print_output!
-        end
+        @commands.select(&:errored?).each(&:print_output!)
         exit 1
       else
         exit 0
