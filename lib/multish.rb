@@ -40,19 +40,19 @@ class MultishItem
       4
     elsif finished?
       errored? ? 3 : 2
-    else
+    else # rubocop:disable Lint/DuplicateBranch
       4
     end
   end
 
   def errored?
-    @exit_code && !(@exit_code == 0)
+    @exit_code && @exit_code != 0
   end
 
   def update_title!
     @nav_window.setpos(0, 0)
     @nav_window.attron(Curses.color_pair(color_code) | Curses::A_REVERSE | Curses::A_BOLD)
-    text = !finished? ? "$ #{command}" : "[ #{command} ] -> #{@exit_code}"
+    text = finished? ? "[ #{command} ] -> #{@exit_code}" : "$ #{command}"
     @nav_window.addstr(text.ljust(width - 1))
     @nav_window.refresh
   end
@@ -66,8 +66,9 @@ class MultishItem
     [@stdout, @stderr]
   end
 
-  def try_update(fd)
-    return unless fd == @stdout || fd == @stderr
+  def try_update(fd) # rubocop:disable Naming/MethodParameterName
+    return unless [@stdout, @stderr].include?(fd)
+
     line = fd.gets
     print(line) if line
   end
@@ -79,6 +80,7 @@ class MultishItem
 
   def finished?
     return false unless @wait_thr
+
     ret = !@wait_thr.alive?
     if ret && !@exit_code
       @exit_code = @wait_thr.value
@@ -109,6 +111,7 @@ class Multish
       while true
         fdlist.reject!(&:closed?)
         break if fdlist.empty?
+
         ready = IO.select(fdlist)[0]
         ready.each do |fd|
           @commands.each { |command| command.try_update(fd) }
