@@ -6,6 +6,110 @@ require 'colorize'
 
 BRIGHT_WHITE = 15
 
+$log = []
+
+class Window
+  def initialize(height, width, top, left)
+    @window = Curses::Window.new(height, width, top, left)
+    @fgcolor = :black
+    @bgcolor = :bright_white
+    reset!
+  end
+
+  def self.screen_width
+    Curses.cols
+  end
+
+  def self.screen_height
+    Curses.lines
+  end
+
+  def setpos(x, y)
+    @window.setpos(x, y)
+  end
+
+  def bold=(value)
+    if value
+      @window.attron(Curses::A_BOLD)
+    else
+      @window.attroff(Curses::A_BOLD)
+    end
+  end
+
+  def fgcolor=(value)
+    @fgcolor = value
+    update_color!
+  end
+
+  def bgcolor=(value)
+    @bgcolor = value
+    update_color!
+  end
+
+  def update_color!
+    fgcode = get_code(@fgcolor)
+    bgcode = get_code(@bgcolor)
+    code = Window.create_color_pair(fgcode, bgcode)
+    @window.attron(Curses.color_pair(code))
+  end
+
+  def get_code(color)
+    case color
+    when :black
+      Curses::COLOR_BLACK
+    when :red
+      Curses::COLOR_RED
+    when :green
+      Curses::COLOR_GREEN
+    when :yellow
+      Curses::COLOR_YELLOW
+    when :blue
+      Curses::COLOR_BLUE
+    when :magenta
+      Curses::COLOR_MAGENTA
+    when :cyan
+      Curses::COLOR_CYAN
+    when :white
+      Curses::COLOR_WHITE
+    when :bright_white
+      Window.create_color(:bright_white, 1000, 1000, 1000)
+    end
+  end
+
+  def self.create_color(code, r, g, b)
+    @colors ||= {}
+    new_index = 15 + @colors.count
+    @colors[code] ||= [new_index, Curses.init_color(new_index, r, g, b)]
+    @colors[code][0]
+  end
+
+  def self.create_color_pair(fg, bg)
+    index = "#{fg}/#{bg}"
+    @pairs ||= {}
+    new_index = 100 + @pairs.count
+    @pairs[index] ||= [new_index, Curses.init_pair(new_index, fg, bg)]
+    @pairs[index][0]
+  end
+
+  def <<(str)
+    @window.addstr(str)
+  end
+
+  def scrollok(value)
+    @window.scrollok(value)
+  end
+
+  def refresh!
+    @window.refresh
+  end
+
+  def reset!
+    self.fgcolor = :black
+    self.bgcolor = :bright_white
+    self.bold = false
+  end
+end
+
 class MultishItem
   attr_reader :command
 
@@ -17,11 +121,11 @@ class MultishItem
   end
 
   def width
-    (Curses.cols / @count).floor
+    (Window.screen_width / @count).floor
   end
 
   def height
-    Curses.lines
+    Window.screen_height
   end
 
   def left
@@ -33,19 +137,19 @@ class MultishItem
   end
 
   def create_window!
-    @nav_window = Curses::Window.new(1, width - 1, top, left)
-    @window = Curses::Window.new(height - 1, width - 1, top + 1, left)
+    @nav_window = Window.new(1, width - 1, top, left)
+    @window = Window.new(height - 1, width - 1, top + 1, left)
     @window.scrollok(true)
     update_title!
   end
 
   def color_code
     if !@wait_thr
-      4
+      :yellow
     elsif finished?
-      errored? ? 3 : 2
+      errored? ? :red : :green
     else # rubocop:disable Lint/DuplicateBranch
-      4
+      :yellow
     end
   end
 
@@ -55,9 +159,11 @@ class MultishItem
 
   def update_title!
     @nav_window.setpos(0, 0)
-    @nav_window.attron(Curses.color_pair(color_code) | Curses::A_REVERSE | Curses::A_BOLD)
-    @nav_window.addstr(window_title.ljust(width - 1))
-    @nav_window.refresh
+    @nav_window.fgcolor = color_code
+    @nav_window.bgcolor = :black
+    @nav_window.bold = true
+    @nav_window << window_title.ljust(width - 1)
+    @nav_window.refresh!
   end
 
   def window_title
@@ -73,7 +179,7 @@ class MultishItem
     [@stdout, @stderr]
   end
 
-  def try_update(fd) # rubocop:disable Naming/MethodParameterName
+  def try_update(fd)
     return unless [@stdout, @stderr].include?(fd)
 
     line = fd.gets
@@ -83,26 +189,27 @@ class MultishItem
   def print(text)
     @output << text
     color_print(@window, text)
-    @window.refresh
+    @window.refresh!
   end
 
   def color_print(window, input)
     parse_commands(input) do |op, arg|
       case op
       when :string
-        window.addstr(arg)
+        window << arg
       when :reset
-        window.attroff(Curses.color_pair(10) | Curses::A_BOLD)
+        window.reset!
       when :bold
-        window.attron(Curses::A_BOLD)
+        window.bold = true
       when :color
-        Curses.init_pair(10, arg, BRIGHT_WHITE)
-        window.attron(Curses.color_pair(10))
+        window.fgcolor = arg
       when :error
         raise "ERROR: #{arg}"
       end
     end
   end
+
+  COLORS = %i[black red green yellow blue magenta cyan white].freeze
 
   def parse_commands(string)
     parse_string(string) do |op, arg|
@@ -120,7 +227,7 @@ class MultishItem
             when 1
               yield [:bold]
             when 30..37
-              color = Curses::COLOR_BLACK + subarg - 30
+              color = COLORS[subarg - 30]
               yield [:color, color]
             end
           end
@@ -200,10 +307,6 @@ class Multish
     Curses.init_screen
     Curses.start_color
     Curses.curs_set(0)
-    Curses.init_pair(2, Curses::COLOR_WHITE, Curses::COLOR_GREEN)
-    Curses.init_pair(3, Curses::COLOR_WHITE, Curses::COLOR_RED)
-    Curses.init_pair(4, Curses::COLOR_WHITE, Curses::COLOR_BLACK)
-    Curses.init_color(BRIGHT_WHITE, 1000, 1000, 1000)
     Curses.use_default_colors
     Curses.cbreak
     @commands.each(&:create_window!)
@@ -229,6 +332,7 @@ class Multish
     ensure
       Curses.curs_set(1)
       Curses.close_screen
+      warn $log.join("\n").blue
       if errored?
         warn 'At least one of the commands exited with error.'
         @commands.select(&:errored?).each(&:print_output!)
